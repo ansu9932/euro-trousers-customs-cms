@@ -1,0 +1,6 @@
+{
+  "name": "Euro Trousers Customs & Warehouse Management System",
+  "description": "Enterprise Customs & Warehouse Management System for EURO TROUSERS MFG. CO. (FZC), SAIF Zone, Sharjah, UAE. Featuring 12 customs modules, 10 RBAC roles, 4-tier declaration approval workflow, dual-ledger stock reconciliation, bilingual EN/AR RTL support, document generation with QR verification, and Tally/Sharjah ePortal integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
