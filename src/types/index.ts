@@ -18,6 +18,13 @@ export interface User {
   role: UserRole;
   department: string;
   avatar?: string;
+  passwordHash?: string;
+  isActive?: boolean;
+  isLocked?: boolean;
+  failedAttempts?: number;
+  lockedUntil?: string | null;
+  mustChangePassword?: boolean;
+  lastLoginAt?: string;
 }
 
 export type PermissionAction = 'view' | 'create' | 'edit' | 'approve' | 'delete';

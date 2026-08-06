@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
+import bcrypt from 'bcryptjs';
 import {
   initialCompanySettings,
   initialUsers,
@@ -32,9 +33,22 @@ import {
 } from './src/data/initialData';
 import { Declaration, DeclarationStatus, AuditLogEntry, WorkflowTransition } from './src/types';
 
+// Pre-hashed passwords for seed users (bcryptjs)
+const DEFAULT_PASSWORD_HASH = bcrypt.hashSync('Demo2026!', 10);
+const ADMIN_PASSWORD_HASH = bcrypt.hashSync('Admin2026!', 10);
+
 // In-Memory Data Store with Initial Seed Data
 let companySettings = { ...initialCompanySettings };
-let users = [...initialUsers];
+let users = initialUsers.map((u) => ({
+  ...u,
+  passwordHash: u.role === 'ADMIN' ? ADMIN_PASSWORD_HASH : DEFAULT_PASSWORD_HASH,
+  isActive: true,
+  isLocked: false,
+  failedAttempts: 0,
+  lockedUntil: null as string | null,
+  mustChangePassword: false,
+  lastLoginAt: new Date().toISOString(),
+}));
 let hsCodes = [...initialHsCodes];
 let countries = [...initialCountries];
 let ports = [...initialPorts];
@@ -165,6 +179,113 @@ function getGemini(): GoogleGenAI | null {
   return geminiClient;
 }
 
+// Security & Authentication Helper Functions
+function getAuthToken(req: express.Request): string | null {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    return authHeader.substring(7).trim();
+  }
+  if (req.query && req.query.token && typeof req.query.token === 'string') {
+    return req.query.token;
+  }
+  if (req.body && req.body.token && typeof req.body.token === 'string') {
+    return req.body.token;
+  }
+  return null;
+}
+
+function getAuthenticatedUser(req: express.Request): { user: any; session: any } | null {
+  const token = getAuthToken(req);
+  if (!token) return null;
+
+  const session = userSessions.find(
+    (s) => (s.token === token || s.id === token || token.includes(s.id)) && !s.isRevoked
+  );
+  if (!session) return null;
+
+  const user = users.find((u) => u.id === session.userId);
+  if (!user) return null;
+
+  return { user, session };
+}
+
+// Middleware: Require valid session & active account
+function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const auth = getAuthenticatedUser(req);
+  if (!auth) {
+    return res.status(401).json({ error: 'Unauthorized: Valid authentication token or active session required' });
+  }
+
+  if (auth.user.isActive === false) {
+    return res.status(403).json({ error: 'Forbidden: Account is deactivated. Contact Administrator.' });
+  }
+
+  (req as any).authUser = auth.user;
+  (req as any).authSession = auth.session;
+  next();
+}
+
+// Middleware: Require ADMIN role specifically from verified session
+function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const auth = getAuthenticatedUser(req);
+  if (!auth) {
+    return res.status(401).json({ error: 'Unauthorized: Authentication required' });
+  }
+
+  if (auth.user.isActive === false) {
+    return res.status(403).json({ error: 'Forbidden: User account is deactivated.' });
+  }
+
+  if (auth.user.role !== 'ADMIN') {
+    return res.status(403).json({ error: 'Forbidden: Admin privilege required' });
+  }
+
+  (req as any).authUser = auth.user;
+  (req as any).authSession = auth.session;
+  next();
+}
+
+// Middleware: Require permission for module and action
+function requirePermission(moduleName: string, actionName: 'view' | 'create' | 'edit' | 'approve' | 'delete') {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const auth = getAuthenticatedUser(req);
+    if (!auth) {
+      return res.status(401).json({ error: 'Unauthorized: Valid session or token required' });
+    }
+
+    if (auth.user.isActive === false) {
+      return res.status(403).json({ error: 'Forbidden: User account is deactivated.' });
+    }
+
+    const currentRole = auth.user.role;
+
+    // ADMIN role has full access
+    if (currentRole === 'ADMIN' || (permissionsMatrix.ADMIN && permissionsMatrix.ADMIN.all)) {
+      (req as any).authUser = auth.user;
+      (req as any).authSession = auth.session;
+      return next();
+    }
+
+    const rolePerms = permissionsMatrix[currentRole];
+    if (rolePerms && rolePerms.all === true) {
+      (req as any).authUser = auth.user;
+      (req as any).authSession = auth.session;
+      return next();
+    }
+
+    const modulePerms = rolePerms?.[moduleName];
+    if (modulePerms && (modulePerms[actionName] === true || modulePerms.all === true)) {
+      (req as any).authUser = auth.user;
+      (req as any).authSession = auth.session;
+      return next();
+    }
+
+    return res.status(403).json({
+      error: `Forbidden: Role ${currentRole} lacks '${actionName}' permission on module '${moduleName}'`,
+    });
+  };
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -191,12 +312,12 @@ async function startServer() {
     res.json(companySettings);
   });
 
-  app.put('/api/company-settings', (req, res) => {
+  app.put('/api/company-settings', requireAdmin, (req, res) => {
     const prev = { ...companySettings };
     companySettings = { ...companySettings, ...req.body };
     logAudit(
-      req.body.updatedByUserId || 'usr-1',
-      req.body.updatedByUserName || 'Administrator',
+      (req as any).authUser.id,
+      (req as any).authUser.name,
       'ADMIN',
       'settings',
       'UPDATE_SETTINGS',
@@ -213,33 +334,94 @@ async function startServer() {
 
   // --- AUTHENTICATION & SESSION MANAGEMENT ---
   app.post('/api/auth/login', (req, res) => {
-    const { email, role, password } = req.body;
-    let user = users.find((u) => u.email.toLowerCase() === (email || '').toLowerCase() || u.role === role);
+    const { email, password, role } = req.body;
+
+    let user = users.find((u) => u.email.toLowerCase() === (email || '').toLowerCase().trim());
     if (!user && role) {
       user = users.find((u) => u.role === role);
     }
     if (!user) {
-      return res.status(401).json({ error: 'Invalid user credentials or role selection' });
+      return res.status(401).json({ error: 'Invalid user credentials or user account not found.' });
+    }
+
+    // Check account active status
+    if (user.isActive === false) {
+      return res.status(403).json({ error: 'Forbidden: User account is deactivated. Contact Administrator.' });
     }
 
     // Check account lockout status
-    if ((user as any).isLocked) {
+    const now = new Date();
+    if (user.isLocked && user.lockedUntil && new Date(user.lockedUntil) > now) {
       return res.status(403).json({ error: 'Account is locked due to multiple failed login attempts. Contact Administrator.' });
     }
 
-    // Generate mock token and session
+    if (user.isLocked && (!user.lockedUntil || new Date(user.lockedUntil) <= now)) {
+      // Lock period expired
+      user.isLocked = false;
+      user.failedAttempts = 0;
+      user.lockedUntil = null;
+    }
+
+    // Verify password with bcryptjs
+    const isMatch = password && user.passwordHash ? bcrypt.compareSync(password, user.passwordHash) : false;
+
+    if (!isMatch) {
+      user.failedAttempts = (user.failedAttempts || 0) + 1;
+      if (user.failedAttempts >= 5) {
+        user.isLocked = true;
+        user.lockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 mins
+        logAudit(
+          user.id,
+          user.name,
+          user.role,
+          'settings',
+          'USER_LOCKOUT',
+          'User',
+          user.id,
+          user.email,
+          'Account locked after 5 consecutive failed login attempts',
+          req.ip
+        );
+        return res.status(403).json({ error: 'Account is locked due to 5 consecutive failed login attempts.' });
+      }
+
+      logAudit(
+        user.id,
+        user.name,
+        user.role,
+        'settings',
+        'FAILED_LOGIN',
+        'User',
+        user.id,
+        user.email,
+        `Failed login attempt ${user.failedAttempts} of 5`,
+        req.ip
+      );
+      return res.status(401).json({ error: `Invalid password. Attempt ${user.failedAttempts} of 5.` });
+    }
+
+    // Reset failed login state
+    user.failedAttempts = 0;
+    user.isLocked = false;
+    user.lockedUntil = null;
+    user.lastLoginAt = new Date().toISOString();
+
+    // Create session & token
     const token = `jwt-token-${user.id}-${Date.now()}`;
     const session = {
       id: `sess-${Date.now()}`,
+      token,
       userId: user.id,
       userName: user.name,
       userRole: user.role,
-      ipAddress: req.ip || '192.168.1.105',
+      ipAddress: req.ip || '127.0.0.1',
       userAgent: req.headers['user-agent'] || 'Browser Client',
       createdAt: new Date().toISOString(),
       lastActiveAt: new Date().toISOString(),
+      isRevoked: false,
       isCurrent: true,
     };
+
     userSessions.unshift(session);
 
     logAudit(
@@ -255,84 +437,99 @@ async function startServer() {
       req.ip
     );
 
+    const { passwordHash, ...sanitizedUser } = user;
+
     res.json({
       token,
-      user,
+      user: sanitizedUser,
       session,
+      mustChangePassword: !!user.mustChangePassword,
       message: 'Authentication successful',
     });
   });
 
-  app.post('/api/auth/logout', (req, res) => {
-    const { userId } = req.body;
-    userSessions = userSessions.filter((s) => s.userId !== userId);
+  app.post('/api/auth/logout', requireAuth, (req, res) => {
+    const session = (req as any).authSession;
+    if (session) {
+      session.isRevoked = true;
+    }
     res.json({ success: true, message: 'Logged out successfully' });
   });
 
-  app.get('/api/auth/sessions', (req, res) => {
-    res.json(userSessions);
-  });
+  app.post('/api/auth/change-password', requireAuth, (req, res) => {
+    const { currentPassword, newPassword } = req.body;
+    const authUser = (req as any).authUser;
 
-  app.post('/api/auth/sessions/:id/revoke', (req, res) => {
-    userSessions = userSessions.filter((s) => s.id !== req.params.id);
-    logAudit(
-      req.body.adminUserId || 'usr-1',
-      req.body.adminUserName || 'Administrator',
-      'ADMIN',
-      'settings',
-      'REVOKE_SESSION',
-      'UserSession',
-      req.params.id,
-      req.params.id,
-      `Revoked active user session ${req.params.id}`,
-      req.ip
-    );
-    res.json({ success: true, message: 'Session revoked' });
-  });
-
-  app.post('/api/auth/change-password', (req, res) => {
-    const { userId, newPassword } = req.body;
-    const userIndex = users.findIndex((u) => u.id === userId);
-    if (userIndex !== -1) {
-      (users[userIndex] as any).mustChangePassword = false;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Current password and new password are required' });
     }
+
+    if (!bcrypt.compareSync(currentPassword, authUser.passwordHash)) {
+      return res.status(400).json({ error: 'Current password does not match' });
+    }
+
+    authUser.passwordHash = bcrypt.hashSync(newPassword, 10);
+    authUser.mustChangePassword = false;
+
     logAudit(
-      userId || 'usr-1',
-      'Staff Member',
-      'USER',
+      authUser.id,
+      authUser.name,
+      authUser.role,
       'settings',
       'CHANGE_PASSWORD',
       'User',
-      userId,
-      userId,
+      authUser.id,
+      authUser.email,
       'Password updated successfully',
       req.ip
     );
+
     res.json({ success: true, message: 'Password updated successfully' });
   });
 
   // --- USER & ROLE ADMINISTRATION ---
-  app.get('/api/users', (req, res) => {
-    res.json(users);
+  // View users list (requires settings:view permission or ADMIN)
+  app.get('/api/users', requirePermission('settings', 'view'), (req, res) => {
+    const sanitized = users.map(({ passwordHash, ...u }) => u);
+    res.json(sanitized);
   });
 
-  app.post('/api/users', (req, res) => {
+  // Admin Create User endpoint: POST /api/admin/users and POST /api/users
+  const handleCreateUser = (req: express.Request, res: express.Response) => {
+    const { name, nameAr, email, role, department, password } = req.body;
+
+    if (!name || !email) {
+      return res.status(400).json({ error: 'Name and email are required' });
+    }
+
+    if (users.some((u) => u.email.toLowerCase() === email.toLowerCase().trim())) {
+      return res.status(400).json({ error: 'User with this email already exists' });
+    }
+
+    const tempPassword = password || `Temp${Math.floor(100000 + Math.random() * 900000)}!`;
     const newUser = {
       id: `usr-${Date.now()}`,
-      name: req.body.name,
-      nameAr: req.body.nameAr || req.body.name,
-      email: req.body.email,
-      role: req.body.role || 'DATA_ENTRY',
-      department: req.body.department || 'Operations',
-      mustChangePassword: true,
+      name,
+      nameAr: nameAr || name,
+      email: email.trim(),
+      role: role || 'DATA_ENTRY',
+      department: department || 'Operations',
+      passwordHash: bcrypt.hashSync(tempPassword, 10),
+      isActive: true,
       isLocked: false,
       failedAttempts: 0,
+      lockedUntil: null as string | null,
+      mustChangePassword: true,
+      lastLoginAt: undefined,
     };
+
     users.push(newUser);
+
+    const admin = (req as any).authUser;
     logAudit(
-      req.body.createdByUserId || 'usr-1',
-      req.body.createdByUserName || 'Administrator',
-      'ADMIN',
+      admin.id,
+      admin.name,
+      admin.role,
       'settings',
       'CREATE_USER',
       'User',
@@ -341,18 +538,38 @@ async function startServer() {
       `Created user account ${newUser.name} (${newUser.role})`,
       req.ip
     );
-    res.status(201).json(newUser);
-  });
 
-  app.put('/api/users/:id', (req, res) => {
+    const { passwordHash, ...sanitized } = newUser;
+    res.status(201).json({ ...sanitized, tempPassword });
+  };
+
+  app.post('/api/admin/users', requireAdmin, handleCreateUser);
+  app.post('/api/users', requireAdmin, handleCreateUser);
+
+  // Admin Update User (role, department, name, active status)
+  app.put('/api/users/:id', requireAdmin, (req, res) => {
     const idx = users.findIndex((u) => u.id === req.params.id);
     if (idx === -1) return res.status(404).json({ error: 'User not found' });
-    const prev = users[idx];
-    users[idx] = { ...prev, ...req.body };
+
+    const prev = { ...users[idx] };
+    const { passwordHash: _, id: __, ...updateFields } = req.body;
+
+    users[idx] = { ...users[idx], ...updateFields };
+
+    // If account was deactivated, revoke all active sessions immediately!
+    if (users[idx].isActive === false) {
+      userSessions.forEach((s) => {
+        if (s.userId === users[idx].id) {
+          s.isRevoked = true;
+        }
+      });
+    }
+
+    const admin = (req as any).authUser;
     logAudit(
-      req.body.updatedByUserId || 'usr-1',
-      req.body.updatedByUserName || 'Administrator',
-      'ADMIN',
+      admin.id,
+      admin.name,
+      admin.role,
       'settings',
       'UPDATE_USER',
       'User',
@@ -363,60 +580,105 @@ async function startServer() {
       prev,
       users[idx]
     );
-    res.json(users[idx]);
+
+    const { passwordHash, ...sanitized } = users[idx];
+    res.json(sanitized);
   });
 
-  app.post('/api/users/:id/unlock', (req, res) => {
-    const userIndex = users.findIndex((u) => u.id === req.params.id);
-    if (userIndex !== -1) {
-      (users[userIndex] as any).isLocked = false;
-      (users[userIndex] as any).failedAttempts = 0;
-    }
+  // Admin Unlock User Account
+  app.post('/api/users/:id/unlock', requireAdmin, (req, res) => {
+    const user = users.find((u) => u.id === req.params.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    user.isLocked = false;
+    user.failedAttempts = 0;
+    user.lockedUntil = null;
+
+    const admin = (req as any).authUser;
     logAudit(
-      req.body.adminUserId || 'usr-1',
-      req.body.adminUserName || 'Administrator',
-      'ADMIN',
+      admin.id,
+      admin.name,
+      admin.role,
       'settings',
       'UNLOCK_USER',
       'User',
-      req.params.id,
-      req.params.id,
-      `Unlocked user account ${req.params.id}`,
+      user.id,
+      user.email,
+      `Unlocked user account ${user.name}`,
       req.ip
     );
-    res.json({ success: true, message: 'User account unlocked' });
+
+    res.json({ success: true, message: `User account ${user.name} unlocked successfully` });
   });
 
-  app.post('/api/users/:id/reset-password', (req, res) => {
-    const userIndex = users.findIndex((u) => u.id === req.params.id);
-    if (userIndex !== -1) {
-      (users[userIndex] as any).mustChangePassword = true;
-    }
+  // Admin Reset User Password
+  app.post('/api/users/:id/reset-password', requireAdmin, (req, res) => {
+    const user = users.find((u) => u.id === req.params.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const tempPassword = `Temp${Math.floor(100000 + Math.random() * 900000)}!`;
+    user.passwordHash = bcrypt.hashSync(tempPassword, 10);
+    user.mustChangePassword = true;
+
+    const admin = (req as any).authUser;
     logAudit(
-      req.body.adminUserId || 'usr-1',
-      req.body.adminUserName || 'Administrator',
-      'ADMIN',
+      admin.id,
+      admin.name,
+      admin.role,
       'settings',
       'RESET_USER_PASSWORD',
       'User',
-      req.params.id,
-      req.params.id,
-      `Triggered password reset for user ${req.params.id}`,
+      user.id,
+      user.email,
+      `Triggered password reset for user ${user.name}`,
       req.ip
     );
-    res.json({ success: true, tempPassword: 'TempPassword2026!' });
+
+    res.json({ success: true, tempPassword, message: `Password reset successfully for ${user.name}` });
   });
 
-  app.get('/api/admin/permissions-matrix', (req, res) => {
+  // Admin View Active Sessions
+  app.get('/api/auth/sessions', requireAdmin, (req, res) => {
+    res.json(userSessions.filter((s) => !s.isRevoked));
+  });
+
+  // Admin Revoke Active Session
+  app.post('/api/auth/sessions/:id/revoke', requireAdmin, (req, res) => {
+    const session = userSessions.find((s) => s.id === req.params.id);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+
+    session.isRevoked = true;
+
+    const admin = (req as any).authUser;
+    logAudit(
+      admin.id,
+      admin.name,
+      admin.role,
+      'settings',
+      'REVOKE_SESSION',
+      'UserSession',
+      session.id,
+      session.userId,
+      `Revoked active user session ${session.id}`,
+      req.ip
+    );
+
+    res.json({ success: true, message: 'Session revoked successfully' });
+  });
+
+  // Permissions Matrix endpoints
+  app.get('/api/admin/permissions-matrix', requirePermission('settings', 'view'), (req, res) => {
     res.json(permissionsMatrix);
   });
 
-  app.put('/api/admin/permissions-matrix', (req, res) => {
+  app.put('/api/admin/permissions-matrix', requireAdmin, (req, res) => {
     permissionsMatrix = { ...permissionsMatrix, ...req.body };
+
+    const admin = (req as any).authUser;
     logAudit(
-      req.body.adminUserId || 'usr-1',
-      req.body.adminUserName || 'Administrator',
-      'ADMIN',
+      admin.id,
+      admin.name,
+      admin.role,
       'settings',
       'UPDATE_PERMISSIONS_MATRIX',
       'RolePermissionsMap',
@@ -425,6 +687,7 @@ async function startServer() {
       'Updated system-wide role permissions matrix',
       req.ip
     );
+
     res.json(permissionsMatrix);
   });
 
