@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { User, UserRole } from '../../types';
+import { apiFetch } from '../../lib/api';
 import { Lock, LogIn, Shield, UserCheck, X, KeyRound, AlertCircle, Key, CheckCircle2 } from 'lucide-react';
 
 export const LoginModal: React.FC = () => {
@@ -31,7 +32,7 @@ export const LoginModal: React.FC = () => {
     const pwdToUse = targetUser && targetUser.role === 'ADMIN' && password === 'Demo2026!' ? 'Admin2026!' : password;
 
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await apiFetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: emailToUse, password: pwdToUse }),
@@ -82,7 +83,7 @@ export const LoginModal: React.FC = () => {
     setErrorMessage(null);
 
     try {
-      const res = await fetch('/api/auth/change-password', {
+      const res = await apiFetch('/api/auth/change-password', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

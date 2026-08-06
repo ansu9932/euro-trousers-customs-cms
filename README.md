@@ -26,30 +26,74 @@ Enterprise Customs & Warehouse Management System designed specifically for **EUR
 
 ## 🏗️ PRODUCTION ARCHITECTURE
 
-- **Frontend**: Vite + React 19 + TypeScript + Tailwind CSS v4 SPA deployed on **Cloudflare Pages**.
-- **Backend**: Node.js + Express REST API running on **Oracle Cloud Infrastructure (OCI) Always Free Ampere A1 ARM VM** with PM2 and Nginx.
-- **Database**: MariaDB / MySQL 8.0+ transactional database (`backend/schema.sql`).
+- **Frontend**: `frontend/` Vite + React 19 + TypeScript + Tailwind CSS v4 SPA, built as static assets for **Cloudflare Pages**.
+- **Backend**: `backend/` Node.js 20 + TypeScript + Express REST API. The current prototype API is preserved while the database-backed services are introduced module by module.
+- **Database target**: PostgreSQL 16 via Docker Compose, with Drizzle ORM configuration and initial schema scaffolding in `backend/src/db/schema.ts`.
+- **Document storage target**: MinIO S3-compatible storage via Docker Compose.
+- **Reverse proxy**: Caddy container forwarding `/api/*` to the Express service.
+
+Repository layout:
+
+```text
+frontend/        Vite React SPA
+backend/         Express API, Drizzle config, services/routes skeleton
+docker-compose.yml
+.env.example
+```
+
+## 🧑‍💻 LOCAL DEVELOPMENT
+
+```bash
+npm install
+
+# terminal 1: API on http://localhost:4000
+npm run dev:backend
+
+# terminal 2: Vite SPA on http://localhost:3000
+npm run dev:frontend
+```
+
+In local development, Vite proxies `/api` to `http://localhost:4000` when `VITE_API_URL` is not set.
+
+Build and typecheck both workspaces:
+
+```bash
+npm run build
+npm run lint
+```
+
+Run the local infrastructure:
+
+```bash
+docker compose up -d --build
+```
 
 ---
 
 ## ⚙️ ENVIRONMENT VARIABLES (`.env`)
 
 ```env
-# Server Configuration
-PORT=3000
+# Frontend
+VITE_API_URL=https://api.example.com
+
+# Backend
+PORT=4000
 NODE_ENV=production
 FRONTEND_URL=https://euro-trousers-cms.pages.dev
-
-# Database Configuration (MySQL / MariaDB)
-DB_HOST=127.0.0.1
-DB_PORT=3306
-DB_USER=customsuser
-DB_PASSWORD=SecurePassword2026!
-DB_NAME=customsdb
+DATABASE_URL=postgres://customs:customs@localhost:5432/euro_trousers_customs
 
 # Security & Authentication
-JWT_SECRET=super-secret-jwt-key-euro-trousers-2026
+JWT_SECRET=replace-with-long-random-access-secret
+JWT_REFRESH_SECRET=replace-with-long-random-refresh-secret
 GM_APPROVAL_THRESHOLD_AED=100000
+
+# MinIO / S3-compatible document storage
+MINIO_ENDPOINT=127.0.0.1
+MINIO_PORT=9000
+MINIO_USE_SSL=false
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=minioadmin
+MINIO_BUCKET=customs-documents
 
 # Google Gemini AI Integration
 GEMINI_API_KEY=your_gemini_api_key_here
@@ -62,6 +106,7 @@ SMTP_PASS=YourEmailPassword2026!
 SMTP_FROM="EURO TROUSERS Customs System" <customs-alerts@eurotrousers.ae>
 
 # Meta WhatsApp Cloud API
+WHATSAPP_ENABLED=false
 WHATSAPP_PHONE_NUMBER_ID=109283746501928
 WHATSAPP_ACCESS_TOKEN=EAAG...your_meta_permanent_token
 WHATSAPP_WEBHOOK_VERIFY_TOKEN=euro_trousers_wa_token_2026
@@ -92,20 +137,21 @@ ssh ubuntu@your-oci-ip
 git clone https://github.com/ansu9932/euro-trousers-customs-cms.git
 cd euro-trousers-customs-cms
 
-# Make deployment script executable & run
-chmod +x backend/deploy.sh
-./backend/deploy.sh
+# Configure .env, then run the production stack
+docker compose up -d --build
 ```
 
 ### 2. Frontend → Cloudflare Pages
 
 ```bash
 # Build production static SPA
-npm run build
+npm run build --workspace frontend
 
 # Deploy via Wrangler CLI or Cloudflare Dashboard
-npx wrangler pages deploy dist --project-name=euro-trousers-cms
+npx wrangler pages deploy frontend/dist --project-name=euro-trousers-cms
 ```
+
+Set `VITE_API_URL` in Cloudflare Pages to the public backend API origin.
 
 ---
 

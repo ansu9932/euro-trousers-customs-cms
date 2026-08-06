@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Sparkles, CheckCircle2, AlertTriangle, X, Search, ShieldCheck, ArrowRight, Loader2 } from 'lucide-react';
+import { apiFetch } from '../../lib/api';
 
 export const AiAdvisorModal: React.FC = () => {
   const { isAiModalOpen, setIsAiModalOpen, declarations, t } = useApp();
@@ -25,7 +26,7 @@ export const AiAdvisorModal: React.FC = () => {
     setIsClassifying(true);
     setClassifyResult(null);
     try {
-      const res = await fetch('/api/ai/classify-hs', {
+      const res = await apiFetch('/api/ai/classify-hs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -49,7 +50,7 @@ export const AiAdvisorModal: React.FC = () => {
     setAuditResult(null);
     const decl = declarations.find((d) => d.id === selectedDeclId);
     try {
-      const res = await fetch('/api/ai/audit-precheck', {
+      const res = await apiFetch('/api/ai/audit-precheck', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ declaration: decl }),

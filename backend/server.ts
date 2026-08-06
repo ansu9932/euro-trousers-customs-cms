@@ -1,6 +1,5 @@
 import express from 'express';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import bcrypt from 'bcryptjs';
 import {
@@ -30,8 +29,8 @@ import {
   initialAuditLogs,
   initialNotifications,
   initialTallyExports,
-} from './src/data/initialData';
-import { Declaration, DeclarationStatus, AuditLogEntry, WorkflowTransition } from './src/types';
+} from '../frontend/src/data/initialData';
+import { Declaration, DeclarationStatus, AuditLogEntry, WorkflowTransition } from '../frontend/src/types';
 
 // Pre-hashed passwords for seed users (bcryptjs)
 const DEFAULT_PASSWORD_HASH = bcrypt.hashSync('Demo2026!', 10);
@@ -288,9 +287,17 @@ function requirePermission(moduleName: string, actionName: 'view' | 'create' | '
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT || 4000);
 
   app.use(express.json({ limit: '10mb' }));
+  app.use((req, res, next) => {
+    const allowedOrigin = process.env.FRONTEND_URL || '*';
+    res.header('Access-Control-Allow-Origin', allowedOrigin);
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+  });
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
   // --- API ROUTES ---
@@ -1855,15 +1862,9 @@ Provide a strict, professional compliance pre-check formatted as JSON:
     });
   });
 
-  // --- VITE MIDDLEWARE SETUP ---
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
+  const staticDistPath = process.env.STATIC_DIST_PATH;
+  if (staticDistPath) {
+    const distPath = path.resolve(staticDistPath);
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));

@@ -15,6 +15,7 @@ export default defineConfig(() => {
       host: '0.0.0.0',
       port: 3000,
       allowedHosts: true as const,
+      proxy: process.env.VITE_API_URL ? undefined : { '/api': 'http://localhost:4000' },
       hmr: process.env.DISABLE_HMR !== 'true',
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },

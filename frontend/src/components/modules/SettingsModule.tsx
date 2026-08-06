@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
+import { apiFetch } from '../../lib/api';
 import {
   Settings,
   Building2,
@@ -95,7 +96,7 @@ export const SettingsModule: React.FC = () => {
     setIsLoadingSessions(true);
     try {
       const token = localStorage.getItem('euro_trousers_jwt_token') || 'jwt-token-usr-1-admin';
-      const res = await fetch('/api/auth/sessions', {
+      const res = await apiFetch('/api/auth/sessions', {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
@@ -112,7 +113,7 @@ export const SettingsModule: React.FC = () => {
   const fetchMatrix = async () => {
     try {
       const token = localStorage.getItem('euro_trousers_jwt_token') || 'jwt-token-usr-1-admin';
-      const res = await fetch('/api/admin/permissions-matrix', {
+      const res = await apiFetch('/api/admin/permissions-matrix', {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
@@ -145,7 +146,7 @@ export const SettingsModule: React.FC = () => {
 
     try {
       const token = localStorage.getItem('euro_trousers_jwt_token') || 'jwt-token-usr-1-admin';
-      const res = await fetch('/api/admin/users', {
+      const res = await apiFetch('/api/admin/users', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -178,7 +179,7 @@ export const SettingsModule: React.FC = () => {
     const updatedStatus = !user.isActive;
     try {
       const token = localStorage.getItem('euro_trousers_jwt_token') || 'jwt-token-usr-1-admin';
-      const res = await fetch(`/api/users/${user.id}`, {
+      const res = await apiFetch(`/api/users/${user.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -207,7 +208,7 @@ export const SettingsModule: React.FC = () => {
   const handleResetPassword = async (user: User) => {
     try {
       const token = localStorage.getItem('euro_trousers_jwt_token') || 'jwt-token-usr-1-admin';
-      const res = await fetch(`/api/users/${user.id}/reset-password`, {
+      const res = await apiFetch(`/api/users/${user.id}/reset-password`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -231,7 +232,7 @@ export const SettingsModule: React.FC = () => {
   const handleUnlockUser = async (user: User) => {
     try {
       const token = localStorage.getItem('euro_trousers_jwt_token') || 'jwt-token-usr-1-admin';
-      const res = await fetch(`/api/users/${user.id}/unlock`, {
+      const res = await apiFetch(`/api/users/${user.id}/unlock`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -254,7 +255,7 @@ export const SettingsModule: React.FC = () => {
   const handleRevokeSession = async (sessionId: string) => {
     try {
       const token = localStorage.getItem('euro_trousers_jwt_token') || 'jwt-token-usr-1-admin';
-      const res = await fetch(`/api/auth/sessions/${sessionId}/revoke`, {
+      const res = await apiFetch(`/api/auth/sessions/${sessionId}/revoke`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -271,7 +272,7 @@ export const SettingsModule: React.FC = () => {
   const handleSaveMatrix = async () => {
     try {
       const token = localStorage.getItem('euro_trousers_jwt_token') || 'jwt-token-usr-1-admin';
-      const res = await fetch('/api/admin/permissions-matrix', {
+      const res = await apiFetch('/api/admin/permissions-matrix', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

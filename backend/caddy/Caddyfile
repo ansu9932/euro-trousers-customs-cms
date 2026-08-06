@@ -1,0 +1,4 @@
+:80 {
+  reverse_proxy /api/* api:4000
+  respond "EURO TROUSERS Customs API is running" 200
+}

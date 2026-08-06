@@ -1,0 +1,72 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: euro_trousers_customs
+      POSTGRES_USER: customs
+      POSTGRES_PASSWORD: customs
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U customs -d euro_trousers_customs"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:RELEASE.2026-07-13T21-06-44Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      PORT: 4000
+      NODE_ENV: production
+      FRONTEND_URL: http://localhost:3000
+      DATABASE_URL: postgres://customs:customs@postgres:5432/euro_trousers_customs
+      JWT_SECRET: change-me-access
+      JWT_REFRESH_SECRET: change-me-refresh
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: customs-documents
+      WHATSAPP_ENABLED: "false"
+      GM_APPROVAL_THRESHOLD_AED: 100000
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./backend/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  minio_data:
+  caddy_data:
+  caddy_config:
