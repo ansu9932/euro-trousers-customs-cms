@@ -79,9 +79,12 @@ const VALID_ROLES = new Set(['ADMIN', 'CUSTOMS_MGR', 'DOC_OFFICER', 'DATA_ENTRY'
 const PASSWORD_PATTERN = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z\d]).{10,128}$/;
 const AUTH_WINDOW_MS = 15 * 60 * 1000;
 const AUTH_MAX_REQUESTS = 12;
+const AUTH_PROTECTION_ENABLED = process.env.AUTH_PROTECTION_ENABLED !== 'false';
 const authRateLimits = new Map<string, { count: number; resetAt: number }>();
 
 function limitAuthenticationRequests(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (!AUTH_PROTECTION_ENABLED) return next();
+
   const key = req.ip || 'unknown';
   const now = Date.now();
   const entry = authRateLimits.get(key);
@@ -380,7 +383,7 @@ async function startServer() {
     }
 
     const user = users.find((candidate) => candidate.loginId === loginId);
-    if (!user || user.isActive === false || user.isLocked) {
+    if (!user || user.isActive === false || (AUTH_PROTECTION_ENABLED && user.isLocked)) {
       return res.status(401).json({ error: 'This user ID is unavailable.' });
     }
 
@@ -397,7 +400,7 @@ async function startServer() {
     // Always perform the bcrypt comparison so unknown IDs do not reveal timing information.
     const isMatch = bcrypt.compareSync(password, expectedPasswordHash);
     if (!user || !isMatch) {
-      if (user) {
+      if (user && AUTH_PROTECTION_ENABLED) {
         user.failedAttempts = (user.failedAttempts || 0) + 1;
         if (user.failedAttempts >= 5) {
           user.isLocked = true;
@@ -412,13 +415,19 @@ async function startServer() {
       return res.status(403).json({ error: 'Forbidden: User account is deactivated. Contact Administrator.' });
     }
 
+    if (!AUTH_PROTECTION_ENABLED) {
+      user.failedAttempts = 0;
+      user.isLocked = false;
+      user.lockedUntil = null;
+    }
+
     // Check account lockout status
     const now = new Date();
-    if (user.isLocked && user.lockedUntil && new Date(user.lockedUntil) > now) {
+    if (AUTH_PROTECTION_ENABLED && user.isLocked && user.lockedUntil && new Date(user.lockedUntil) > now) {
       return res.status(403).json({ error: 'Account is locked due to multiple failed login attempts. Contact Administrator.' });
     }
 
-    if (user.isLocked && (!user.lockedUntil || new Date(user.lockedUntil) <= now)) {
+    if (AUTH_PROTECTION_ENABLED && user.isLocked && (!user.lockedUntil || new Date(user.lockedUntil) <= now)) {
       // Lock period expired
       user.isLocked = false;
       user.failedAttempts = 0;
