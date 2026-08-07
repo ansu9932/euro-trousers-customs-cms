@@ -1,0 +1,7 @@
+{
+  "name": "euro-trousers-customs-cms",
+  "compatibility_date": "2026-08-07",
+  "assets": {
+    "directory": "frontend/dist"
+  }
+}

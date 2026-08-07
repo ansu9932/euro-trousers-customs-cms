@@ -12,6 +12,7 @@ export type UserRole =
 
 export interface User {
   id: string;
+  loginId?: string;
   name: string;
   nameAr?: string;
   email: string;
@@ -625,4 +626,3 @@ export interface DataMigrationJob {
   errors: { rowNumber: number; column: string; message: string }[];
   stagedDataPreview: any[];
 }
-

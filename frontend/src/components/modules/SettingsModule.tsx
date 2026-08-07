@@ -45,6 +45,7 @@ export const SettingsModule: React.FC = () => {
   // User Administration State
   const [isCreateUserModalOpen, setIsCreateUserModalOpen] = useState<boolean>(false);
   const [newUserName, setNewUserName] = useState<string>('');
+  const [newUserLoginId, setNewUserLoginId] = useState<string>('');
   const [newUserEmail, setNewUserEmail] = useState<string>('');
   const [newUserRole, setNewUserRole] = useState<UserRole>('DATA_ENTRY');
   const [newUserDept, setNewUserDept] = useState<string>('Customs Operations');
@@ -95,7 +96,8 @@ export const SettingsModule: React.FC = () => {
   const fetchSessions = async () => {
     setIsLoadingSessions(true);
     try {
-      const token = localStorage.getItem('euro_trousers_jwt_token') || 'jwt-token-usr-1-admin';
+      const token = localStorage.getItem('euro_trousers_jwt_token');
+      if (!token) throw new Error('Sign in is required');
       const res = await apiFetch('/api/auth/sessions', {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -112,7 +114,8 @@ export const SettingsModule: React.FC = () => {
 
   const fetchMatrix = async () => {
     try {
-      const token = localStorage.getItem('euro_trousers_jwt_token') || 'jwt-token-usr-1-admin';
+      const token = localStorage.getItem('euro_trousers_jwt_token');
+      if (!token) throw new Error('Sign in is required');
       const res = await apiFetch('/api/admin/permissions-matrix', {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -142,10 +145,11 @@ export const SettingsModule: React.FC = () => {
   // User Admin Actions
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newUserName || !newUserEmail) return;
+    if (!newUserName || !newUserLoginId || !newUserEmail) return;
 
     try {
-      const token = localStorage.getItem('euro_trousers_jwt_token') || 'jwt-token-usr-1-admin';
+      const token = localStorage.getItem('euro_trousers_jwt_token');
+      if (!token) throw new Error('Sign in is required');
       const res = await apiFetch('/api/admin/users', {
         method: 'POST',
         headers: {
@@ -154,6 +158,7 @@ export const SettingsModule: React.FC = () => {
         },
         body: JSON.stringify({
           name: newUserName,
+          loginId: newUserLoginId,
           email: newUserEmail,
           role: newUserRole,
           department: newUserDept,
@@ -178,7 +183,8 @@ export const SettingsModule: React.FC = () => {
   const handleToggleUserActive = async (user: User) => {
     const updatedStatus = !user.isActive;
     try {
-      const token = localStorage.getItem('euro_trousers_jwt_token') || 'jwt-token-usr-1-admin';
+      const token = localStorage.getItem('euro_trousers_jwt_token');
+      if (!token) throw new Error('Sign in is required');
       const res = await apiFetch(`/api/users/${user.id}`, {
         method: 'PUT',
         headers: {
@@ -207,7 +213,8 @@ export const SettingsModule: React.FC = () => {
 
   const handleResetPassword = async (user: User) => {
     try {
-      const token = localStorage.getItem('euro_trousers_jwt_token') || 'jwt-token-usr-1-admin';
+      const token = localStorage.getItem('euro_trousers_jwt_token');
+      if (!token) throw new Error('Sign in is required');
       const res = await apiFetch(`/api/users/${user.id}/reset-password`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
@@ -231,7 +238,8 @@ export const SettingsModule: React.FC = () => {
 
   const handleUnlockUser = async (user: User) => {
     try {
-      const token = localStorage.getItem('euro_trousers_jwt_token') || 'jwt-token-usr-1-admin';
+      const token = localStorage.getItem('euro_trousers_jwt_token');
+      if (!token) throw new Error('Sign in is required');
       const res = await apiFetch(`/api/users/${user.id}/unlock`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
@@ -254,7 +262,8 @@ export const SettingsModule: React.FC = () => {
 
   const handleRevokeSession = async (sessionId: string) => {
     try {
-      const token = localStorage.getItem('euro_trousers_jwt_token') || 'jwt-token-usr-1-admin';
+      const token = localStorage.getItem('euro_trousers_jwt_token');
+      if (!token) throw new Error('Sign in is required');
       const res = await apiFetch(`/api/auth/sessions/${sessionId}/revoke`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
@@ -271,7 +280,8 @@ export const SettingsModule: React.FC = () => {
 
   const handleSaveMatrix = async () => {
     try {
-      const token = localStorage.getItem('euro_trousers_jwt_token') || 'jwt-token-usr-1-admin';
+      const token = localStorage.getItem('euro_trousers_jwt_token');
+      if (!token) throw new Error('Sign in is required');
       const res = await apiFetch('/api/admin/permissions-matrix', {
         method: 'PUT',
         headers: {
@@ -643,6 +653,7 @@ export const SettingsModule: React.FC = () => {
               <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-400 font-semibold border-b border-slate-200 dark:border-slate-800">
                 <tr>
                   <th className="p-3">Staff Name</th>
+                  <th className="p-3">User ID</th>
                   <th className="p-3">Email Address</th>
                   <th className="p-3">System Role</th>
                   <th className="p-3">Department</th>
@@ -665,6 +676,7 @@ export const SettingsModule: React.FC = () => {
                         </div>
                       </div>
                     </td>
+                    <td className="p-3 font-mono text-[11px] text-slate-600 dark:text-slate-400">{user.loginId || user.email.split('@')[0]}</td>
                     <td className="p-3 font-mono text-[11px] text-slate-600 dark:text-slate-400">{user.email}</td>
                     <td className="p-3">
                       <span className="px-2 py-0.5 rounded font-mono font-bold text-[10px] bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
@@ -776,6 +788,22 @@ export const SettingsModule: React.FC = () => {
                   </div>
 
                   <div>
+                    <label className="block font-semibold mb-1">User ID:</label>
+                    <input
+                      type="text"
+                      required
+                      minLength={3}
+                      maxLength={40}
+                      pattern="[a-z0-9._-]+"
+                      value={newUserLoginId}
+                      onChange={(e) => setNewUserLoginId(e.target.value.toLowerCase())}
+                      placeholder="e.g. salim.customs"
+                      className="w-full px-3 py-2 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono"
+                    />
+                    <p className="text-[10px] text-slate-400 mt-1">3-40 lowercase letters, numbers, dots, hyphens, or underscores.</p>
+                  </div>
+
+                  <div>
                     <label className="block font-semibold mb-1">Official Email Address:</label>
                     <input
                       type="email"
@@ -820,11 +848,12 @@ export const SettingsModule: React.FC = () => {
                       type="password"
                       value={newUserPassword}
                       onChange={(e) => setNewUserPassword(e.target.value)}
-                      placeholder="Leave blank to auto-generate temporary password..."
+                      minLength={10}
+                      placeholder="Leave blank to auto-generate a temporary password..."
                       className="w-full px-3 py-2 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800"
                     />
                     <p className="text-[10px] text-slate-400 mt-1">
-                      User will be forced to change this password on first sign-in.
+                      If supplied, use at least 10 characters with letters, numbers, and a symbol. Every new user must change it on first sign-in.
                     </p>
                   </div>
 
@@ -1014,4 +1043,3 @@ export const SettingsModule: React.FC = () => {
     </div>
   );
 };
-

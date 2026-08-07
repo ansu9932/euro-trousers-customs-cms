@@ -28,7 +28,11 @@ import { SettingsModule } from './components/modules/SettingsModule';
 import { ApiDocsModule } from './components/modules/ApiDocsModule';
 
 const AppContent: React.FC = () => {
-  const { activeModule, toastMessage, isRtl } = useApp();
+  const { activeModule, toastMessage, isRtl, isAuthenticated } = useApp();
+
+  if (!isAuthenticated) {
+    return <LoginModal />;
+  }
 
   const renderActiveModule = () => {
     switch (activeModule) {

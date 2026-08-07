@@ -53,6 +53,7 @@ interface AppContextType {
   language: Language;
   setLanguage: (lang: Language) => void;
   t: typeof translations.en;
+  isAuthenticated: boolean;
   currentUser: User;
   setCurrentUser: (user: User) => void;
   allUsers: User[];
@@ -124,7 +125,8 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [language, setLanguage] = useState<Language>('en');
-  const [currentUser, setCurrentUser] = useState<User>(initialUsers[0]); // Default: Admin
+  const [currentUser, setCurrentUser] = useState<User>(initialUsers[0]);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [allUsers, setAllUsers] = useState<User[]>(initialUsers);
   const [activeModule, setActiveModule] = useState<SystemModule>('dashboard');
   const [companySettings, setCompanySettings] = useState<CompanySettings>(initialCompanySettings);
@@ -199,7 +201,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [globalSearch, setGlobalSearch] = useState<string>('');
   const [isAiModalOpen, setIsAiModalOpen] = useState<boolean>(false);
   const [isQrScannerOpen, setIsQrScannerOpen] = useState<boolean>(false);
-  const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(true);
   const [printDocData, setPrintDocData] = useState<any | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -207,6 +209,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const loginUser = (user: User) => {
     setCurrentUser(user);
+    setIsAuthenticated(true);
     showToast(`Authenticated as ${user.name} (${user.role})`);
     addAuditLog(
       'USER_LOGIN',
@@ -219,6 +222,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const logoutUser = () => {
+    localStorage.removeItem('euro_trousers_jwt_token');
+    setIsAuthenticated(false);
     setIsLoginModalOpen(true);
     showToast('Logged out of active session.');
   };
@@ -320,6 +325,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         language,
         setLanguage,
         t,
+        isAuthenticated,
         currentUser,
         setCurrentUser,
         allUsers,

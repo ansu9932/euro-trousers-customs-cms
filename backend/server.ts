@@ -40,6 +40,7 @@ const ADMIN_PASSWORD_HASH = bcrypt.hashSync('Admin2026!', 10);
 let companySettings = { ...initialCompanySettings };
 let users = initialUsers.map((u) => ({
   ...u,
+  loginId: u.loginId || u.email.split('@')[0],
   passwordHash: u.role === 'ADMIN' ? ADMIN_PASSWORD_HASH : DEFAULT_PASSWORD_HASH,
   isActive: true,
   isLocked: false,
@@ -72,6 +73,35 @@ let customsDocuments = [...initialCustomsDocuments];
 let auditLogs: AuditLogEntry[] = [...initialAuditLogs];
 let notifications = [...initialNotifications];
 let tallyExports = [...initialTallyExports];
+
+const USER_ID_PATTERN = /^[a-z0-9._-]{3,40}$/;
+const VALID_ROLES = new Set(['ADMIN', 'CUSTOMS_MGR', 'DOC_OFFICER', 'DATA_ENTRY', 'WAREHOUSE', 'FINANCE', 'LOGISTICS', 'GM', 'VIEWER', 'AUDITOR']);
+const PASSWORD_PATTERN = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z\d]).{10,128}$/;
+const AUTH_WINDOW_MS = 15 * 60 * 1000;
+const AUTH_MAX_REQUESTS = 12;
+const authRateLimits = new Map<string, { count: number; resetAt: number }>();
+
+function limitAuthenticationRequests(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const key = req.ip || 'unknown';
+  const now = Date.now();
+  const entry = authRateLimits.get(key);
+
+  if (!entry || entry.resetAt <= now) {
+    authRateLimits.set(key, { count: 1, resetAt: now + AUTH_WINDOW_MS });
+    return next();
+  }
+
+  entry.count += 1;
+  if (entry.count > AUTH_MAX_REQUESTS) {
+    res.setHeader('Retry-After', Math.ceil((entry.resetAt - now) / 1000));
+    return res.status(429).json({ error: 'Too many sign-in attempts. Please wait 15 minutes and try again.' });
+  }
+  next();
+}
+
+function isStrongPassword(password: unknown): password is string {
+  return typeof password === 'string' && PASSWORD_PATTERN.test(password);
+}
 
 // Additional Production Engine Memory Stores
 let userSessions: any[] = [
@@ -198,7 +228,7 @@ function getAuthenticatedUser(req: express.Request): { user: any; session: any }
   if (!token) return null;
 
   const session = userSessions.find(
-    (s) => (s.token === token || s.id === token || token.includes(s.id)) && !s.isRevoked
+    (s) => s.token === token && !s.isRevoked
   );
   if (!session) return null;
 
@@ -289,6 +319,9 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT || 4000);
 
+  // The API is only reachable through Caddy, so one trusted reverse proxy is expected.
+  app.set('trust proxy', 1);
+
   app.use(express.json({ limit: '10mb' }));
   app.use((req, res, next) => {
     const allowedOrigin = process.env.FRONTEND_URL || '*';
@@ -340,15 +373,38 @@ async function startServer() {
   });
 
   // --- AUTHENTICATION & SESSION MANAGEMENT ---
-  app.post('/api/auth/login', (req, res) => {
-    const { email, password, role } = req.body;
-
-    let user = users.find((u) => u.email.toLowerCase() === (email || '').toLowerCase().trim());
-    if (!user && role) {
-      user = users.find((u) => u.role === role);
+  app.post('/api/auth/identify', limitAuthenticationRequests, (req, res) => {
+    const loginId = typeof req.body.loginId === 'string' ? req.body.loginId.toLowerCase().trim() : '';
+    if (!USER_ID_PATTERN.test(loginId)) {
+      return res.status(400).json({ error: 'Enter a valid user ID.' });
     }
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid user credentials or user account not found.' });
+
+    const user = users.find((candidate) => candidate.loginId === loginId);
+    if (!user || user.isActive === false || user.isLocked) {
+      return res.status(401).json({ error: 'This user ID is unavailable.' });
+    }
+
+    const { passwordHash: _, failedAttempts: __, lockedUntil: ___, ...sanitizedUser } = user;
+    res.json({ user: sanitizedUser });
+  });
+
+  app.post('/api/auth/login', limitAuthenticationRequests, (req, res) => {
+    const loginId = typeof req.body.loginId === 'string' ? req.body.loginId.toLowerCase().trim() : '';
+    const password = typeof req.body.password === 'string' ? req.body.password : '';
+    const user = users.find((candidate) => candidate.loginId === loginId);
+    const expectedPasswordHash = user?.passwordHash || DEFAULT_PASSWORD_HASH;
+
+    // Always perform the bcrypt comparison so unknown IDs do not reveal timing information.
+    const isMatch = bcrypt.compareSync(password, expectedPasswordHash);
+    if (!user || !isMatch) {
+      if (user) {
+        user.failedAttempts = (user.failedAttempts || 0) + 1;
+        if (user.failedAttempts >= 5) {
+          user.isLocked = true;
+          user.lockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+        }
+      }
+      return res.status(401).json({ error: 'Invalid user ID or password.' });
     }
 
     // Check account active status
@@ -367,44 +423,6 @@ async function startServer() {
       user.isLocked = false;
       user.failedAttempts = 0;
       user.lockedUntil = null;
-    }
-
-    // Verify password with bcryptjs
-    const isMatch = password && user.passwordHash ? bcrypt.compareSync(password, user.passwordHash) : false;
-
-    if (!isMatch) {
-      user.failedAttempts = (user.failedAttempts || 0) + 1;
-      if (user.failedAttempts >= 5) {
-        user.isLocked = true;
-        user.lockedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 mins
-        logAudit(
-          user.id,
-          user.name,
-          user.role,
-          'settings',
-          'USER_LOCKOUT',
-          'User',
-          user.id,
-          user.email,
-          'Account locked after 5 consecutive failed login attempts',
-          req.ip
-        );
-        return res.status(403).json({ error: 'Account is locked due to 5 consecutive failed login attempts.' });
-      }
-
-      logAudit(
-        user.id,
-        user.name,
-        user.role,
-        'settings',
-        'FAILED_LOGIN',
-        'User',
-        user.id,
-        user.email,
-        `Failed login attempt ${user.failedAttempts} of 5`,
-        req.ip
-      );
-      return res.status(401).json({ error: `Invalid password. Attempt ${user.failedAttempts} of 5.` });
     }
 
     // Reset failed login state
@@ -471,6 +489,10 @@ async function startServer() {
       return res.status(400).json({ error: 'Current password and new password are required' });
     }
 
+    if (!isStrongPassword(newPassword)) {
+      return res.status(400).json({ error: 'Password must be at least 10 characters and include letters, numbers, and a symbol.' });
+    }
+
     if (!bcrypt.compareSync(currentPassword, authUser.passwordHash)) {
       return res.status(400).json({ error: 'Current password does not match' });
     }
@@ -503,19 +525,37 @@ async function startServer() {
 
   // Admin Create User endpoint: POST /api/admin/users and POST /api/users
   const handleCreateUser = (req: express.Request, res: express.Response) => {
-    const { name, nameAr, email, role, department, password } = req.body;
+    const { name, nameAr, loginId, email, role, department, password } = req.body;
+    const normalizedLoginId = typeof loginId === 'string' ? loginId.toLowerCase().trim() : '';
 
-    if (!name || !email) {
-      return res.status(400).json({ error: 'Name and email are required' });
+    if (!name || !email || !normalizedLoginId) {
+      return res.status(400).json({ error: 'Name, user ID, and email are required' });
+    }
+
+    if (!USER_ID_PATTERN.test(normalizedLoginId)) {
+      return res.status(400).json({ error: 'User ID must be 3-40 characters using lowercase letters, numbers, dots, hyphens, or underscores.' });
+    }
+
+    if (!VALID_ROLES.has(role || 'DATA_ENTRY')) {
+      return res.status(400).json({ error: 'A valid system role is required' });
     }
 
     if (users.some((u) => u.email.toLowerCase() === email.toLowerCase().trim())) {
       return res.status(400).json({ error: 'User with this email already exists' });
     }
 
-    const tempPassword = password || `Temp${Math.floor(100000 + Math.random() * 900000)}!`;
+    if (users.some((u) => u.loginId === normalizedLoginId)) {
+      return res.status(400).json({ error: 'User ID is already in use' });
+    }
+
+    if (password && !isStrongPassword(password)) {
+      return res.status(400).json({ error: 'Initial password must be at least 10 characters and include letters, numbers, and a symbol.' });
+    }
+
+    const tempPassword = password || `Temp-${Math.random().toString(36).slice(2, 10)}-9!`;
     const newUser = {
       id: `usr-${Date.now()}`,
+      loginId: normalizedLoginId,
       name,
       nameAr: nameAr || name,
       email: email.trim(),
