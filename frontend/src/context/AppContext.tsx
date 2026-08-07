@@ -123,10 +123,21 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
+function getStoredUser(): User {
+  try {
+    const storedUser = localStorage.getItem('euro_trousers_current_user');
+    return storedUser ? JSON.parse(storedUser) as User : initialUsers[0];
+  } catch {
+    return initialUsers[0];
+  }
+}
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [language, setLanguage] = useState<Language>('en');
-  const [currentUser, setCurrentUser] = useState<User>(initialUsers[0]);
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [currentUser, setCurrentUser] = useState<User>(getStoredUser);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => Boolean(
+    localStorage.getItem('euro_trousers_jwt_token') && localStorage.getItem('euro_trousers_current_user')
+  ));
   const [allUsers, setAllUsers] = useState<User[]>(initialUsers);
   const [activeModule, setActiveModule] = useState<SystemModule>('dashboard');
   const [companySettings, setCompanySettings] = useState<CompanySettings>(initialCompanySettings);
@@ -209,6 +220,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const loginUser = (user: User) => {
     setCurrentUser(user);
+    localStorage.setItem('euro_trousers_current_user', JSON.stringify(user));
     setIsAuthenticated(true);
     showToast(`Authenticated as ${user.name} (${user.role})`);
     addAuditLog(
@@ -223,6 +235,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const logoutUser = () => {
     localStorage.removeItem('euro_trousers_jwt_token');
+    localStorage.removeItem('euro_trousers_current_user');
     setIsAuthenticated(false);
     setIsLoginModalOpen(true);
     showToast('Logged out of active session.');
