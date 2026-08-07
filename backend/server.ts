@@ -1,4 +1,5 @@
 import express from 'express';
+import { promises as fs } from 'fs';
 import path from 'path';
 import { GoogleGenAI } from '@google/genai';
 import bcrypt from 'bcryptjs';
@@ -73,6 +74,28 @@ let customsDocuments = [...initialCustomsDocuments];
 let auditLogs: AuditLogEntry[] = [...initialAuditLogs];
 let notifications = [...initialNotifications];
 let tallyExports = [...initialTallyExports];
+
+const MASTER_DATA_FILE = path.join(process.env.DATA_DIR || path.resolve(process.cwd(), '.data'), 'master-data.json');
+
+async function loadPersistedMasterData() {
+  try {
+    const contents = await fs.readFile(MASTER_DATA_FILE, 'utf8');
+    const saved = JSON.parse(contents);
+    if (Array.isArray(saved.hsCodes)) hsCodes = saved.hsCodes;
+    if (Array.isArray(saved.items)) items = saved.items;
+    if (Array.isArray(saved.partners)) partners = saved.partners;
+    console.log(`Loaded persisted master data from ${MASTER_DATA_FILE}`);
+  } catch (error: any) {
+    if (error.code !== 'ENOENT') console.error('Unable to load persisted master data:', error.message);
+  }
+}
+
+async function savePersistedMasterData() {
+  await fs.mkdir(path.dirname(MASTER_DATA_FILE), { recursive: true });
+  const tempFile = `${MASTER_DATA_FILE}.tmp`;
+  await fs.writeFile(tempFile, JSON.stringify({ hsCodes, items, partners }), 'utf8');
+  await fs.rename(tempFile, MASTER_DATA_FILE);
+}
 
 const USER_ID_PATTERN = /^[a-z0-9._-]{3,40}$/;
 const VALID_ROLES = new Set(['ADMIN', 'CUSTOMS_MGR', 'DOC_OFFICER', 'DATA_ENTRY', 'WAREHOUSE', 'FINANCE', 'LOGISTICS', 'GM', 'VIEWER', 'AUDITOR']);
@@ -319,6 +342,7 @@ function requirePermission(moduleName: string, actionName: 'view' | 'create' | '
 }
 
 async function startServer() {
+  await loadPersistedMasterData();
   const app = express();
   const PORT = Number(process.env.PORT || 4000);
 
@@ -842,20 +866,68 @@ async function startServer() {
     res.status(201).json(snapshot);
   });
 
-  app.post('/api/migration/stage', (req, res) => {
-    const { entityName, fileName, rows, uploadedBy } = req.body;
+  app.post('/api/migration/stage', requireAdmin, (req, res) => {
+    const { entityName, fileName, rows } = req.body;
+    const uploadedBy = (req as any).authUser.name;
     const errors: { rowNumber: number; column: string; message: string }[] = [];
     let validCount = 0;
+    const supportedEntities = ['ItemMaster', 'HsCode', 'BusinessPartner'];
+    const stagedRows = Array.isArray(rows) ? rows.slice(0, 1000) : [];
+    const seenKeys = new Set<string>();
 
-    (rows || []).forEach((row: any, idx: number) => {
+    if (!supportedEntities.includes(entityName)) {
+      return res.status(400).json({ error: 'Choose Item Master, HS Codes, or Business Partners for bulk upload.' });
+    }
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ error: 'The uploaded file does not contain any data rows.' });
+    }
+
+    if (rows.length > 1000) {
+      return res.status(400).json({ error: 'Upload a maximum of 1,000 rows per batch.' });
+    }
+
+    stagedRows.forEach((row: any, idx: number) => {
       const rowNum = idx + 1;
-      if (entityName === 'ItemMaster' && (!row.itemCode || !row.descriptionEn)) {
-        errors.push({ rowNumber: rowNum, column: 'itemCode/descriptionEn', message: 'Item code and description are required.' });
-      } else if (entityName === 'HsCode' && (!row.code || !row.dutyRatePercent)) {
-        errors.push({ rowNumber: rowNum, column: 'code/dutyRatePercent', message: 'HS Code format and Duty Rate % are required.' });
-      } else {
-        validCount++;
+      const clean = Object.fromEntries(Object.entries(row || {}).map(([key, value]) => [key.trim(), typeof value === 'string' ? value.trim() : value]));
+      Object.assign(row, clean);
+      const key = entityName === 'ItemMaster' ? String(row.itemCode || '').toUpperCase() : entityName === 'HsCode' ? String(row.code || '') : String(row.nameEn || '').toUpperCase();
+
+      if (!key) {
+        errors.push({ rowNumber: rowNum, column: entityName === 'BusinessPartner' ? 'nameEn' : entityName === 'HsCode' ? 'code' : 'itemCode', message: 'A unique primary value is required.' });
+        return;
       }
+      if (seenKeys.has(key)) {
+        errors.push({ rowNumber: rowNum, column: 'unique identifier', message: 'This value is duplicated in the upload file.' });
+        return;
+      }
+      seenKeys.add(key);
+
+      if (entityName === 'ItemMaster') {
+        if (!row.itemCode || !row.descriptionEn || !row.hsCode || !row.uom) {
+          errors.push({ rowNumber: rowNum, column: 'itemCode/descriptionEn/hsCode/uom', message: 'Item code, description, HS code, and unit of measure are required.' });
+          return;
+        }
+        if (items.some((item) => item.itemCode.toUpperCase() === key)) {
+          errors.push({ rowNumber: rowNum, column: 'itemCode', message: 'An item with this code already exists.' });
+          return;
+        }
+      } else if (entityName === 'HsCode') {
+        const dutyRate = Number(row.dutyRatePercent);
+        if (!row.code || !row.descriptionEn || Number.isNaN(dutyRate) || dutyRate < 0) {
+          errors.push({ rowNumber: rowNum, column: 'code/descriptionEn/dutyRatePercent', message: 'HS code, description, and a valid duty rate are required.' });
+          return;
+        }
+        if (hsCodes.some((code) => code.code === key)) {
+          errors.push({ rowNumber: rowNum, column: 'code', message: 'An HS code with this value already exists.' });
+          return;
+        }
+      } else if (!row.nameEn || !row.type || !row.countryCode) {
+        errors.push({ rowNumber: rowNum, column: 'nameEn/type/countryCode', message: 'Partner name, type, and two-letter country code are required.' });
+        return;
+      }
+
+      validCount++;
     });
 
     const job = {
@@ -864,12 +936,12 @@ async function startServer() {
       fileName: fileName || 'Import_Template.xlsx',
       uploadedBy: uploadedBy || 'Data Entry Officer',
       uploadedAt: new Date().toISOString(),
-      totalRows: (rows || []).length,
+      totalRows: stagedRows.length,
       validRows: validCount,
       errorRows: errors.length,
       status: errors.length === 0 ? 'VALIDATED' : 'STAGED',
       errors,
-      stagedDataPreview: rows || [],
+      stagedDataPreview: stagedRows,
     };
 
     migrationJobs.unshift(job);
@@ -889,9 +961,78 @@ async function startServer() {
     res.status(201).json(job);
   });
 
-  app.post('/api/migration/commit/:id', (req, res) => {
+  app.post('/api/migration/commit/:id', requireAdmin, async (req, res) => {
     const job = migrationJobs.find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: 'Migration job not found' });
+    if (job.status === 'COMMITTED') return res.status(409).json({ error: 'This batch has already been committed.' });
+    if (job.errorRows > 0) return res.status(422).json({ error: 'Resolve all validation errors before committing this batch.' });
+
+    const importedRows = job.stagedDataPreview.map((row: any, index: number) => {
+      if (job.entityName === 'HsCode') {
+        const record = {
+          id: `hs-${Date.now()}-${index}`,
+          code: String(row.code),
+          descriptionEn: String(row.descriptionEn),
+          descriptionAr: String(row.descriptionAr || row.descriptionEn),
+          dutyRatePercent: Number(row.dutyRatePercent),
+          vatRatePercent: Number(row.vatRatePercent || 0),
+          unitOfMeasure: String(row.unitOfMeasure || row.uom || 'PCS'),
+          category: row.category || 'OTHER',
+          isFreeZoneExemptEligible: String(row.isFreeZoneExemptEligible).toLowerCase() !== 'false',
+        };
+        hsCodes.push(record);
+        return record;
+      }
+
+      if (job.entityName === 'ItemMaster') {
+        const matchingHsCode = hsCodes.find((code) => code.code === String(row.hsCode));
+        const record = {
+          id: `item-${Date.now()}-${index}`,
+          itemCode: String(row.itemCode),
+          descriptionEn: String(row.descriptionEn),
+          descriptionAr: String(row.descriptionAr || row.descriptionEn),
+          category: row.category || 'OTHER',
+          garmentCategory: row.garmentCategory || row.category || 'OTHER',
+          hsCodeId: matchingHsCode?.id || '',
+          hsCode: String(row.hsCode),
+          uom: String(row.uom),
+          standardCostAED: Number(row.standardCostAED || row.unitValueAED || 0),
+          unitValueAED: Number(row.unitValueAED || row.standardCostAED || 0),
+          currency: String(row.currency || 'AED'),
+          reorderLevel: Number(row.reorderLevel || 0),
+          totalStockCustoms: Number(row.totalStockCustoms || 0),
+          totalStockWarehouse: Number(row.totalStockWarehouse || 0),
+        };
+        items.push(record);
+        return record;
+      }
+
+      const record = {
+        id: `partner-${Date.now()}-${index}`,
+        code: String(row.code || `BP-${Date.now()}-${index + 1}`),
+        nameEn: String(row.nameEn),
+        nameAr: String(row.nameAr || row.nameEn),
+        type: row.type,
+        countryCode: String(row.countryCode).toUpperCase(),
+        country: String(row.country || row.countryCode).toUpperCase(),
+        trn: row.trn ? String(row.trn) : undefined,
+        customsCode: row.customsCode ? String(row.customsCode) : undefined,
+        contactEmail: row.contactEmail ? String(row.contactEmail) : undefined,
+        phone: row.phone ? String(row.phone) : undefined,
+        currency: String(row.currency || 'AED'),
+        address: row.address ? String(row.address) : undefined,
+        isActive: String(row.isActive).toLowerCase() !== 'false',
+      };
+      partners.push(record);
+      return record;
+    });
+
+    try {
+      await savePersistedMasterData();
+    } catch (error: any) {
+      return res.status(500).json({ error: `Imported data could not be saved permanently: ${error.message}` });
+    }
+
     job.status = 'COMMITTED';
     job.committedAt = new Date().toISOString();
     job.committedBy = req.body.userName || 'Administrator';
@@ -908,10 +1049,10 @@ async function startServer() {
       `Committed ${job.validRows} staged rows into production tables for ${job.entityName}`,
       req.ip
     );
-    res.json(job);
+    res.json({ ...job, importedRows: importedRows.length });
   });
 
-  app.post('/api/migration/rollback/:id', (req, res) => {
+  app.post('/api/migration/rollback/:id', requireAdmin, (req, res) => {
     const job = migrationJobs.find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: 'Migration job not found' });
     job.status = 'ROLLED_BACK';

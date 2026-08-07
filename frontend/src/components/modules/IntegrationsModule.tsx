@@ -14,7 +14,9 @@ import {
   Layers,
   Database,
   ExternalLink,
+  FileSpreadsheet,
 } from 'lucide-react';
+import { BulkDataUploadPanel } from './BulkDataUploadPanel';
 
 export const IntegrationsModule: React.FC = () => {
   const {
@@ -29,7 +31,7 @@ export const IntegrationsModule: React.FC = () => {
     t,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'TALLY_ERP' | 'SHARJAH_CUSTOMS' | 'NOTIFICATIONS'>('TALLY_ERP');
+  const [activeTab, setActiveTab] = useState<'TALLY_ERP' | 'SHARJAH_CUSTOMS' | 'BULK_UPLOAD' | 'NOTIFICATIONS'>('TALLY_ERP');
   const [selectedDeclId, setSelectedDeclId] = useState(declarations[0]?.id || '');
   const [exportType, setExportType] = useState<'PURCHASE_VOUCHER' | 'SALES_VOUCHER' | 'STOCK_JOURNAL'>('PURCHASE_VOUCHER');
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
@@ -206,6 +208,18 @@ export const IntegrationsModule: React.FC = () => {
         </button>
 
         <button
+          onClick={() => setActiveTab('BULK_UPLOAD')}
+          className={`pb-3 border-b-2 transition-colors flex items-center gap-2 ${
+            activeTab === 'BULK_UPLOAD'
+              ? 'border-blue-600 text-blue-600 dark:text-blue-400'
+              : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+          }`}
+        >
+          <FileSpreadsheet className="w-4 h-4" />
+          <span>Bulk Data Upload</span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('SHARJAH_CUSTOMS')}
           className={`pb-3 border-b-2 transition-colors flex items-center gap-2 ${
             activeTab === 'SHARJAH_CUSTOMS'
@@ -229,6 +243,8 @@ export const IntegrationsModule: React.FC = () => {
           <span>Notification & Alert Dispatcher</span>
         </button>
       </div>
+
+      {activeTab === 'BULK_UPLOAD' && <BulkDataUploadPanel />}
 
       {/* 1. Tally ERP Integration */}
       {activeTab === 'TALLY_ERP' && (
