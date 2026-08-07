@@ -20,7 +20,7 @@ const roleDescriptions: Record<UserRole, string> = {
 };
 
 export const LoginModal: React.FC = () => {
-  const { isLoginModalOpen, loginUser, showToast } = useApp();
+  const { isLoginModalOpen, setIsLoginModalOpen, loginUser, showToast } = useApp();
   const [step, setStep] = useState<LoginStep>('IDENTIFY');
   const [loginId, setLoginId] = useState('');
   const [password, setPassword] = useState('');
@@ -80,8 +80,8 @@ export const LoginModal: React.FC = () => {
       }
 
       loginUser(data.user);
+      setIsLoginModalOpen(false);
       showToast(`Welcome back, ${data.user.name}`);
-      window.location.reload();
     } catch (error: any) {
       setErrorMessage(error.message || 'Unable to sign in');
     } finally {
@@ -108,8 +108,8 @@ export const LoginModal: React.FC = () => {
       if (!response.ok) throw new Error(data.error || 'Unable to update password');
 
       if (identifiedUser) loginUser({ ...identifiedUser, mustChangePassword: false });
+      setIsLoginModalOpen(false);
       showToast('Password updated. You are signed in.');
-      window.location.reload();
     } catch (error: any) {
       setErrorMessage(error.message || 'Unable to update password');
     } finally {
