@@ -16,6 +16,14 @@ export const OfficialDocumentPrintModal: React.FC = () => {
     }
   }, [printDocData]);
 
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPrintDocData(null);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [setPrintDocData]);
+
   if (!printDocData) return null;
 
   const handlePrint = () => {
@@ -28,8 +36,8 @@ export const OfficialDocumentPrintModal: React.FC = () => {
     : (printDocData.titleEn || 'OFFICIAL CUSTOMS CLEARANCE DOCUMENT');
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xs overflow-y-auto">
-      <div className="bg-white text-slate-900 rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col my-8">
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/80 p-4 backdrop-blur-sm" onMouseDown={() => setPrintDocData(null)}>
+      <div className="my-8 flex w-full max-w-4xl flex-col overflow-hidden rounded-lg bg-white text-slate-900 shadow-2xl" role="dialog" aria-modal="true" aria-label="Official document print preview" onMouseDown={(event) => event.stopPropagation()}>
         
         {/* Action Header (Hidden during print) */}
         <div className="px-6 py-3 bg-slate-900 text-white flex items-center justify-between print:hidden">
@@ -49,9 +57,12 @@ export const OfficialDocumentPrintModal: React.FC = () => {
             </button>
             <button
               onClick={() => setPrintDocData(null)}
-              className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-800"
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-700 px-2.5 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-white"
+              aria-label="Close print preview"
+              title="Close preview"
             >
               <X className="w-5 h-5" />
+              <span>Close preview</span>
             </button>
           </div>
         </div>
